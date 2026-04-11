@@ -1,0 +1,21 @@
+{
+  "name": "titian-whatsapp-bot",
+  "version": "2.0.0",
+  "description": "WhatsApp AI assistant for Titian Fine & Titian Jewelry — review mode with Google Sheets logging",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "express": "^4.18.2",
+    "googleapis": "^140.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
