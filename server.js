@@ -209,9 +209,50 @@ IMPORTANT RULES:
 - Use emojis sparingly but warmly
 - Always end with a warm, inviting closing (invite them to ask more or visit us)`;
 
+// ─── DOWNLOAD MEDIA FROM WHATSAPP ────────────────────────────────────────────
+async function downloadWhatsAppMedia(mediaId) {
+  // Step 1: Get the media URL from WhatsApp
+  const metaRes = await axios.get(
+    `https://graph.facebook.com/v18.0/${mediaId}`,
+    { headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` } }
+  );
+  const mediaUrl = metaRes.data.url;
+  const mimeType = metaRes.data.mime_type || "image/jpeg";
+
+  // Step 2: Download the actual binary
+  const mediaRes = await axios.get(mediaUrl, {
+    headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
+    responseType: "arraybuffer",
+  });
+
+  const base64Data = Buffer.from(mediaRes.data).toString("base64");
+  return { base64Data, mimeType };
+}
+
 // ─── CLAUDE API CALL ──────────────────────────────────────────────────────────
-async function askClaude(phoneNumber, userMessage) {
-  addToHistory(phoneNumber, "user", userMessage);
+async function askClaude(phoneNumber, userMessage, imageData = null) {
+  // Build the user content — text only, or text + image
+  let userContent;
+  if (imageData) {
+    userContent = [
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: imageData.mimeType,
+          data: imageData.base64Data,
+        },
+      },
+      {
+        type: "text",
+        text: userMessage,
+      },
+    ];
+  } else {
+    userContent = userMessage;
+  }
+
+  addToHistory(phoneNumber, "user", userContent);
   const history = getHistory(phoneNumber);
 
   const response = await axios.post(
@@ -285,12 +326,6 @@ app.post("/webhook", async (req, res) => {
     const messageType = message.type;
     const contactName = value?.contacts?.[0]?.profile?.name || "Unknown";
 
-    if (messageType !== "text") {
-      console.log(`Non-text message from ${from} — skipping`);
-      return;
-    }
-
-    const userText = message.text.body;
     const timestamp = new Date().toLocaleString("en-GB", {
       timeZone: "Asia/Makassar",
       day: "2-digit",
@@ -300,10 +335,69 @@ app.post("/webhook", async (req, res) => {
       minute: "2-digit",
     });
 
+    // ── Route by message type ──────────────────────────────────────────────────
+    let userText = "";
+    let imageData = null;
+    let suggestedReply = "";
+
+    if (messageType === "text") {
+      userText = message.text.body;
+
+    } else if (messageType === "image") {
+      const mediaId = message.image.id;
+      const caption = message.image.caption || "";
+      userText = caption
+        ? `[Customer sent a photo with caption: "${caption}"]`
+        : "[Customer sent a photo — please describe what you see and respond helpfully as a jewelry assistant]";
+
+      console.log(`[${timestamp}] ${contactName} (${from}): [IMAGE] ${caption || "(no caption)"}`);
+
+      try {
+        imageData = await downloadWhatsAppMedia(mediaId);
+      } catch (err) {
+        console.error("Failed to download image:", err.message);
+        // Fall back to text-only if image download fails
+        userText = caption
+          ? `Customer sent a photo (couldn't load it) with caption: "${caption}"`
+          : "Customer sent a photo but it couldn't be loaded. Please ask them to describe what they're looking for.";
+      }
+
+    } else if (messageType === "video") {
+      console.log(`[${timestamp}] ${contactName} (${from}): [VIDEO — skipping]`);
+      const videoReply = "Haii! 😊 Maaf, kami belum bisa buka video. Boleh kirim foto atau ceritakan di chat ya — kami siap bantu! 🌟";
+      await logToSheet({
+        timestamp,
+        customerPhone: from,
+        customerName: contactName,
+        customerMessage: "[Video message]",
+        suggestedReply: videoReply,
+      });
+      if (CONFIG.SEND_REPLIES) await sendWhatsAppMessage(from, videoReply);
+      return;
+
+    } else if (messageType === "audio") {
+      console.log(`[${timestamp}] ${contactName} (${from}): [AUDIO — skipping]`);
+      const audioReply = "Haii! 😊 Maaf, kami belum bisa buka pesan suara. Boleh ketik pertanyaanmu ya — kami siap bantu! 🌟";
+      await logToSheet({
+        timestamp,
+        customerPhone: from,
+        customerName: contactName,
+        customerMessage: "[Audio message]",
+        suggestedReply: audioReply,
+      });
+      if (CONFIG.SEND_REPLIES) await sendWhatsAppMessage(from, audioReply);
+      return;
+
+    } else {
+      // Stickers, documents, reactions, etc. — silently ignore
+      console.log(`[${timestamp}] ${contactName} (${from}): [${messageType.toUpperCase()} — ignored]`);
+      return;
+    }
+
     console.log(`[${timestamp}] ${contactName} (${from}): ${userText}`);
 
-    // Get Claude's suggested reply
-    const suggestedReply = await askClaude(from, userText);
+    // Get Claude's suggested reply (with optional image)
+    suggestedReply = await askClaude(from, userText, imageData);
 
     // Log everything to Google Sheets
     await logToSheet({
