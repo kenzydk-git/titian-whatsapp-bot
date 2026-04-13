@@ -211,21 +211,31 @@ IMPORTANT RULES:
 
 // ─── DOWNLOAD MEDIA FROM WHATSAPP ────────────────────────────────────────────
 async function downloadWhatsAppMedia(mediaId) {
-  // Step 1: Get the media URL from WhatsApp
+  // Step 1: Get the media URL + mime type from WhatsApp
   const metaRes = await axios.get(
     `https://graph.facebook.com/v18.0/${mediaId}`,
-    { headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` } }
+    {
+      headers: {
+        Authorization: `Bearer ${CONFIG.WA_TOKEN}`,
+        "User-Agent": "TitianBot/1.0",
+      },
+    }
   );
   const mediaUrl = metaRes.data.url;
   const mimeType = metaRes.data.mime_type || "image/jpeg";
+  console.log(`Media URL fetched — mime: ${mimeType}`);
 
-  // Step 2: Download the actual binary
+  // Step 2: Download the actual binary from the CDN URL
   const mediaRes = await axios.get(mediaUrl, {
-    headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
+    headers: {
+      Authorization: `Bearer ${CONFIG.WA_TOKEN}`,
+      "User-Agent": "TitianBot/1.0",
+    },
     responseType: "arraybuffer",
   });
 
   const base64Data = Buffer.from(mediaRes.data).toString("base64");
+  console.log(`Image downloaded — ${base64Data.length} base64 chars`);
   return { base64Data, mimeType };
 }
 
@@ -355,7 +365,8 @@ app.post("/webhook", async (req, res) => {
       try {
         imageData = await downloadWhatsAppMedia(mediaId);
       } catch (err) {
-        console.error("Failed to download image:", err.message);
+        const errDetail = err?.response?.data || err?.response?.status || err.message;
+        console.error("Failed to download image:", JSON.stringify(errDetail));
         // Fall back to text-only if image download fails
         userText = caption
           ? `Customer sent a photo (couldn't load it) with caption: "${caption}"`
